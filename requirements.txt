@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+gensim
+numpy
+scikit-learn
+joblib
+python-multipart
+requests
+fastapi-advanced-rate-limiter
+redis
