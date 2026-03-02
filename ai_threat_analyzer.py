@@ -1,13 +1,13 @@
 # =========================================
 # GuardianX AI Threat Analyzer
-# Day 3 – Final Stable Version (Modified)
-# with retrain() function
+# Final Stable Version - Render Compatible
 # =========================================
 
 import re
 import pickle
 import numpy as np
 import pandas as pd
+import os
 
 from gensim.models import KeyedVectors
 from sklearn.linear_model import LogisticRegression
@@ -34,28 +34,51 @@ LABELS = {
 class ThreatAnalyzer:
 
     # ---------------------------------
-    # INIT
+    # INIT - معدل بالكامل للنشر
     # ---------------------------------
     def __init__(self):
 
         print("Loading fastText model...")
 
-        self.vectors = KeyedVectors.load_word2vec_format(
-            r"D:\مشروع\cc.ar.300.vec",   # عدّلي المسار فقط لو مختلف
-            binary=False
-        )
+        # البحث عن النموذج في أماكن متعددة
+        possible_paths = [
+            "cc.ar.300.vec",                    # في نفس المجلد
+            "./cc.ar.300.vec",
+            "/opt/render/project/src/cc.ar.300.vec",  # مسار Render
+            r"D:\مشروع\cc.ar.300.vec"            # مسار محلي للتجربة
+        ]
+        
+        model_path = None
+        for path in possible_paths:
+            if os.path.exists(path):
+                model_path = path
+                print(f"✅ وجدت النموذج في: {path}")
+                break
+        
+        # إذا لم نجد النموذج، نستخدم نموذجاً مصغراً
+        if model_path is None:
+            print("⚠ لم أجد ملف النموذج الكبير. سأستخدم نموذجاً مصغراً للاختبار.")
+            from gensim.test.utils import common_texts
+            from gensim.models import Word2Vec
+            
+            print("جاري إنشاء نموذج مصغر للاختبار...")
+            temp_model = Word2Vec(common_texts, vector_size=100, window=5, min_count=1, workers=4)
+            self.vectors = temp_model.wv
+            print("✅ تم إنشاء النموذج المصغر بنجاح!")
+        else:
+            # تحميل النموذج الحقيقي
+            self.vectors = KeyedVectors.load_word2vec_format(
+                model_path,
+                binary=False
+            )
+            print("fastText loaded ✔")
 
-        print("fastText loaded ✔")
-
+        # تحميل النموذج التدريبي إن وجد
         self.model = LogisticRegression(max_iter=1000)
-
-        # لو في موديل محفوظ → حمليه
         try:
             with open(MODEL_FILE, "rb") as f:
                 self.model = pickle.load(f)
                 print("Model loaded from file ✔")
-
-        # لو ما في → درّبي
         except:
             print("Training new model...")
             self.train()
@@ -77,7 +100,7 @@ class ThreatAnalyzer:
 
 
     # ---------------------------------
-    # تدريب النموذج (نسخة آمنة)
+    # تدريب النموذج
     # ---------------------------------
     def train(self):
 
@@ -88,7 +111,6 @@ class ThreatAnalyzer:
 
         for text, label in zip(df["text"], df["label"]):
 
-            # تنظيف label (يمنع KeyError) + تحويل لحروف صغيرة
             label = str(label).strip().lower()
 
             if label not in LABELS:
@@ -112,7 +134,7 @@ class ThreatAnalyzer:
 
 
     # ---------------------------------
-    # دالة إعادة التدريب (الجديدة)
+    # إعادة التدريب
     # ---------------------------------
     def retrain(self, new_file=None):
         """
@@ -122,14 +144,11 @@ class ThreatAnalyzer:
         
         print("🔄 جاري إعادة التدريب على كل البيانات...")
         
-        # قراءة البيانات الأساسية
         df = pd.read_csv(DATA_FILE)
         
-        # لو في ملف إضافي، ندمجه مع الأساسي
         if new_file:
             df_new = pd.read_csv(new_file)
             df = pd.concat([df, df_new], ignore_index=True)
-            # (اختياري) نحفظ الملف المدمج عشان نستفيد منه بعدين
             df.to_csv(DATA_FILE, index=False)
             print(f"📁 تم دمج ملف {new_file} مع البيانات الأساسية")
         
@@ -150,22 +169,15 @@ class ThreatAnalyzer:
         X = np.array(X)
         y = np.array(y)
         
-        # تدريب النموذج
         self.model.fit(X, y)
         
-        # حفظ النموذج الجديد
         with open(MODEL_FILE, "wb") as f:
             pickle.dump(self.model, f)
         
-        # طباعة تقرير
         print(f"✅ تم إعادة التدريب بنجاح!")
         print(f"📊 إجمالي الجمل: {len(df)}")
-        print(f"📊 جمل مستخدمة في التدريب: {len(y)}")
         if skipped > 0:
-            print(f"⚠ جمل تم تخطيها (تسمية غير معروفة): {skipped}")
-        print(f"📊 توزيع التصنيفات:")
-        for label, count in df['label'].value_counts().items():
-            print(f"   • {label}: {count}")
+            print(f"⚠ جمل تم تخطيها: {skipped}")
 
 
     # ---------------------------------
@@ -177,7 +189,6 @@ class ThreatAnalyzer:
 
         pred = self.model.predict(vec)[0]
 
-        # عكس القاموس
         inv = {v: k for k, v in LABELS.items()}
 
         return inv[pred]
@@ -190,18 +201,6 @@ class ThreatAnalyzer:
 if __name__ == "__main__":
 
     analyzer = ThreatAnalyzer()
-
-    # ----------------------------
-    # مثال: إعادة التدريب (لو تبغى)
-    # ----------------------------
-    
-    # analyzer.retrain()  # أزل التعليق لو تبي تعيد التدريب فوراً
-    
-    # analyzer.retrain("جمل_جديدة.csv")  # لو عندك ملف إضافي
-    
-    # ----------------------------
-    # اختبار التنبؤ
-    # ----------------------------
     
     tests = [
         "مرحبا كيف حالك",
