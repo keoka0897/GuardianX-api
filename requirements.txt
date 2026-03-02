@@ -1,6 +1,6 @@
 fastapi
 uvicorn
-gensim
+gensim==4.3.3
 numpy
 scikit-learn
 joblib
