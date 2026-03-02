@@ -33,7 +33,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger("guardianx")
 
-app = FastAPI(docs_url=None, redoc_url=None)
+# ✅ تم تعديل هذا السطر لإظهار الواجهة التوثيقية
+app = FastAPI()
 
 # قراءة مفتاح API من المتغيرات البيئية
 API_KEY = os.getenv("API_KEY", "guardian123")
