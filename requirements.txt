@@ -2,6 +2,7 @@ fastapi
 uvicorn[standard]
 gensim>=4.3.3
 numpy<2.0.0
+pandas
 scikit-learn
 joblib
 python-multipart
