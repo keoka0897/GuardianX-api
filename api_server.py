@@ -4,7 +4,23 @@ from ai_threat_analyzer import ThreatAnalyzer
 import os
 import time
 import logging
-from fastapi_advanced_rate_limiter import SlidingWindowRateLimiter
+
+# محاولة استيراد Rate Limiter بشكل اختياري
+try:
+    from fastapi_advanced_rate_limiter import SlidingWindowRateLimiter
+    RATE_LIMITER_AVAILABLE = True
+    logger_rate = logging.getLogger("guardianx.ratelimiter")
+    logger_rate.info("✅ Rate Limiter متاح")
+except ImportError:
+    RATE_LIMITER_AVAILABLE = False
+    # إنشاء كلاس بديل يفعل ничего
+    class SlidingWindowRateLimiter:
+        def __init__(self, *args, **kwargs):
+            pass
+        def allow_request(self, client_id):
+            return True
+        def get_wait_time(self, client_id):
+            return 0
 
 # إعداد التسجيل (Logging)
 logging.basicConfig(
@@ -22,7 +38,7 @@ app = FastAPI(docs_url=None, redoc_url=None)
 # قراءة مفتاح API من المتغيرات البيئية
 API_KEY = os.getenv("API_KEY", "guardian123")
 
-# ✅ إضافة Rate Limiter - 10 طلبات في الدقيقة لكل مستخدم
+# إعداد Rate Limiter (إذا كان متاحاً)
 limiter = SlidingWindowRateLimiter(
     capacity=10,      # 10 طلبات كحد أقصى
     fill_rate=10/60,  # لكل 60 ثانية
@@ -51,15 +67,16 @@ async def predict(request: Request, data: TextRequest, x_api_key: str = Header(N
         logger.warning(f"محاولة بمفتاح غير صالح: {x_api_key[:5]}...")
         raise HTTPException(status_code=403, detail="مفتاح غير صالح")
     
-    # ✅ 3. التحقق من عدد الطلبات (Rate Limiting)
-    client_id = x_api_key
-    if not limiter.allow_request(client_id):
-        wait_time = limiter.get_wait_time(client_id)
-        logger.warning(f"كثرة طلبات من المستخدم: {x_api_key[:5]}...")
-        raise HTTPException(
-            status_code=429,
-            detail=f"عدد الطلبات كبير جداً. حاول بعد {wait_time:.0f} ثانية"
-        )
+    # 3. التحقق من عدد الطلبات (Rate Limiting) - فقط إذا كان متاحاً
+    if RATE_LIMITER_AVAILABLE:
+        client_id = x_api_key
+        if not limiter.allow_request(client_id):
+            wait_time = limiter.get_wait_time(client_id)
+            logger.warning(f"كثرة طلبات من المستخدم: {x_api_key[:5]}...")
+            raise HTTPException(
+                status_code=429,
+                detail=f"عدد الطلبات كبير جداً. حاول بعد {wait_time:.0f} ثانية"
+            )
     
     # 4. تنفيذ التحليل
     start_time = time.time()
