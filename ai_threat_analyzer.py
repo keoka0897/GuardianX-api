@@ -1,6 +1,6 @@
 # =========================================
 # GuardianX AI Threat Analyzer
-# Final Stable Version - Render Compatible
+# Version 2.0 - مع AraBERT (500MB)
 # =========================================
 
 import re
@@ -8,8 +8,8 @@ import pickle
 import numpy as np
 import pandas as pd
 import os
-
-from gensim.models import KeyedVectors
+import torch
+from transformers import AutoTokenizer, AutoModel
 from sklearn.linear_model import LogisticRegression
 
 
@@ -19,6 +19,7 @@ from sklearn.linear_model import LogisticRegression
 
 DATA_FILE = "dataset.csv"
 MODEL_FILE = "guardian_model.pkl"
+ARABERT_PATH = "./arabic_model"  # المسار المحلي للنموذج
 
 LABELS = {
     "safe": 0,
@@ -34,69 +35,75 @@ LABELS = {
 class ThreatAnalyzer:
 
     # ---------------------------------
-    # INIT - معدل بالكامل للنشر
+    # INIT - مع AraBERT
     # ---------------------------------
     def __init__(self):
 
-        print("Loading fastText model...")
+        print("="*50)
+        print("🚀 جاري تحميل نموذج AraBERT...")
+        print("="*50)
 
-        # البحث عن النموذج في أماكن متعددة
-        possible_paths = [
-            "cc.ar.300.vec",                    # في نفس المجلد
-            "./cc.ar.300.vec",
-            "/opt/render/project/src/cc.ar.300.vec",  # مسار Render
-            r"D:\مشروع\cc.ar.300.vec"            # مسار محلي للتجربة
-        ]
-        
-        model_path = None
-        for path in possible_paths:
-            if os.path.exists(path):
-                model_path = path
-                print(f"✅ وجدت النموذج في: {path}")
-                break
-        
-        # إذا لم نجد النموذج، نستخدم نموذجاً مصغراً
-        if model_path is None:
-            print("⚠ لم أجد ملف النموذج الكبير. سأستخدم نموذجاً مصغراً للاختبار.")
-            from gensim.test.utils import common_texts
-            from gensim.models import Word2Vec
-            
-            print("جاري إنشاء نموذج مصغر للاختبار...")
-            temp_model = Word2Vec(common_texts, vector_size=100, window=5, min_count=1, workers=4)
-            self.vectors = temp_model.wv
-            print("✅ تم إنشاء النموذج المصغر بنجاح!")
+        # التحقق من وجود النموذج المحفوظ
+        if not os.path.exists(ARABERT_PATH):
+            print("⚠ لم أجد النموذج المحفوظ. سيتم تحميله من الإنترنت (قد يستغرق دقائق)")
+            # إذا لم يكن موجوداً، نحمله من Hugging Face
+            model_name = "aubmindlab/bert-base-arabertv2"
+            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+            self.bert_model = AutoModel.from_pretrained(model_name)
+            # نحفظه للمستقبل
+            os.makedirs(ARABERT_PATH, exist_ok=True)
+            self.tokenizer.save_pretrained(ARABERT_PATH)
+            self.bert_model.save_pretrained(ARABERT_PATH)
+            print("✅ تم تحميل وحفظ النموذج محلياً")
         else:
-            # تحميل النموذج الحقيقي
-            self.vectors = KeyedVectors.load_word2vec_format(
-                model_path,
-                binary=False
-            )
-            print("fastText loaded ✔")
+            # تحميل النموذج من المسار المحلي
+            print(f"📂 تحميل النموذج من: {ARABERT_PATH}")
+            self.tokenizer = AutoTokenizer.from_pretrained(ARABERT_PATH)
+            self.bert_model = AutoModel.from_pretrained(ARABERT_PATH)
+            print("✅ تم تحميل النموذج المحلي بنجاح!")
 
-        # تحميل النموذج التدريبي إن وجد
-        self.model = LogisticRegression(max_iter=1000)
-        try:
+        # تحديد الجهاز (GPU إن وجد)
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.bert_model.to(self.device)
+        print(f"💻 الجهاز المستخدم: {self.device}")
+
+        # تحميل نموذج التصنيف (Logistic Regression)
+        self.classifier = LogisticRegression(max_iter=1000)
+        
+        # محاولة تحميل النموذج المدرب مسبقاً
+        if os.path.exists(MODEL_FILE):
             with open(MODEL_FILE, "rb") as f:
-                self.model = pickle.load(f)
-                print("Model loaded from file ✔")
-        except:
-            print("Training new model...")
+                self.classifier = pickle.load(f)
+                print("✅ تم تحميل نموذج التصنيف من ملف")
+        else:
+            print("🔄 لا يوجد نموذج تصنيف محفوظ. سيتم تدريب نموذج جديد...")
             self.train()
 
 
     # ---------------------------------
-    # تحويل النص إلى متجه
+    # تحويل النص إلى متجه باستخدام AraBERT
     # ---------------------------------
     def text_to_vector(self, text):
+        """
+        تحويل النص إلى متجه (768 بعداً) باستخدام AraBERT
+        """
+        # تجهيز النص
+        inputs = self.tokenizer(
+            text, 
+            return_tensors="pt", 
+            padding=True, 
+            truncation=True, 
+            max_length=128
+        ).to(self.device)
 
-        words = re.findall(r"\w+", str(text))
+        # تمرير النص عبر النموذج
+        with torch.no_grad():
+            outputs = self.bert_model(**inputs)
 
-        vecs = [self.vectors[w] for w in words if w in self.vectors]
-
-        if not vecs:
-            return np.zeros(self.vectors.vector_size)
-
-        return np.mean(vecs, axis=0)
+        # استخدام متوسط التشفيرات (Mean Pooling)
+        embedding = outputs.last_hidden_state.mean(dim=1).squeeze().cpu().numpy()
+        
+        return embedding
 
 
     # ---------------------------------
@@ -104,45 +111,74 @@ class ThreatAnalyzer:
     # ---------------------------------
     def train(self):
 
+        print("📚 جاري قراءة بيانات التدريب...")
         df = pd.read_csv(DATA_FILE)
 
         X = []
         y = []
+        skipped = 0
 
-        for text, label in zip(df["text"], df["label"]):
+        for idx, (text, label) in enumerate(zip(df["text"], df["label"])):
+            # عرض التقدم كل 100 جملة
+            if idx % 100 == 0:
+                print(f"⏳ معالجة الجملة {idx}/{len(df)}")
 
             label = str(label).strip().lower()
 
             if label not in LABELS:
-                print(f"⚠ Skipped unknown label: {label}")
+                skipped += 1
                 continue
 
-            X.append(self.text_to_vector(text))
+            # تحويل النص إلى متجه
+            vec = self.text_to_vector(text)
+            X.append(vec)
             y.append(LABELS[label])
 
         X = np.array(X)
         y = np.array(y)
 
-        self.model.fit(X, y)
+        print(f"\n📊 إجمالي الجمل: {len(df)}")
+        print(f"📊 جمل مستخدمة في التدريب: {len(y)}")
+        print(f"⚠ جمل تم تخطيها: {skipped}")
+        print(f"📊 شكل مصفوفة التدريب: {X.shape}")
 
-        print("Training complete ✔")
+        # تدريب النموذج
+        print("\n🧠 جاري تدريب النموذج...")
+        self.classifier.fit(X, y)
+        print("✅ تم التدريب بنجاح!")
 
+        # حفظ النموذج
         with open(MODEL_FILE, "wb") as f:
-            pickle.dump(self.model, f)
-
-        print("Model saved ✔")
+            pickle.dump(self.classifier, f)
+        print("💾 تم حفظ النموذج في ملف")
 
 
     # ---------------------------------
-    # إعادة التدريب
+    # التنبؤ
+    # ---------------------------------
+    def predict(self, text):
+
+        # تحويل النص إلى متجه
+        vec = self.text_to_vector(text).reshape(1, -1)
+
+        # التنبؤ
+        pred = self.classifier.predict(vec)[0]
+
+        # تحويل الرقم إلى تسمية
+        inv = {v: k for k, v in LABELS.items()}
+        
+        return inv[pred]
+
+
+    # ---------------------------------
+    # إعادة التدريب (اختياري)
     # ---------------------------------
     def retrain(self, new_file=None):
         """
         إعادة تدريب النموذج على كل البيانات
-        new_file: (اختياري) ملف CSV إضافي فيه جمل جديدة
+        new_file: (اختياري) ملف CSV إضافي
         """
-        
-        print("🔄 جاري إعادة التدريب على كل البيانات...")
+        print("\n🔄 جاري إعادة التدريب...")
         
         df = pd.read_csv(DATA_FILE)
         
@@ -150,7 +186,7 @@ class ThreatAnalyzer:
             df_new = pd.read_csv(new_file)
             df = pd.concat([df, df_new], ignore_index=True)
             df.to_csv(DATA_FILE, index=False)
-            print(f"📁 تم دمج ملف {new_file} مع البيانات الأساسية")
+            print(f"📁 تم دمج ملف {new_file}")
         
         X = []
         y = []
@@ -163,35 +199,20 @@ class ThreatAnalyzer:
                 skipped += 1
                 continue
                 
-            X.append(self.text_to_vector(text))
+            vec = self.text_to_vector(text)
+            X.append(vec)
             y.append(LABELS[label])
         
         X = np.array(X)
         y = np.array(y)
         
-        self.model.fit(X, y)
+        self.classifier.fit(X, y)
         
         with open(MODEL_FILE, "wb") as f:
-            pickle.dump(self.model, f)
+            pickle.dump(self.classifier, f)
         
-        print(f"✅ تم إعادة التدريب بنجاح!")
-        print(f"📊 إجمالي الجمل: {len(df)}")
-        if skipped > 0:
-            print(f"⚠ جمل تم تخطيها: {skipped}")
-
-
-    # ---------------------------------
-    # التنبؤ
-    # ---------------------------------
-    def predict(self, text):
-
-        vec = self.text_to_vector(text).reshape(1, -1)
-
-        pred = self.model.predict(vec)[0]
-
-        inv = {v: k for k, v in LABELS.items()}
-
-        return inv[pred]
+        print(f"✅ تم إعادة التدريب!")
+        print(f"📊 الجمل المستخدمة: {len(y)}")
 
 
 # ==============================
@@ -212,4 +233,5 @@ if __name__ == "__main__":
 
     print("\n🔍 اختبار التنبؤ:")
     for t in tests:
-        print(f"  • {t} ➡ {analyzer.predict(t)}")
+        result = analyzer.predict(t)
+        print(f"  • {t} ➡ {result}")
